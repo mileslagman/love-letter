@@ -6,7 +6,7 @@
 <title>ASCII Lily of the Valley</title>
 <style>
   html, body { margin: 0; height: 100%; background: #04050a; overflow: hidden; }
-  canvas { display: block; width: 100vw; height: 100vh; cursor: pointer; }
+  canvas { display: block; width: 100vw; height: 100vh; cursor: grab; touch-action: none; user-select: none; }
 </style>
 </head>
 <body>
@@ -18,12 +18,13 @@
   const off = document.createElement('canvas');
   const octx = off.getContext('2d', { willReadFrequently: true });
 
-  const MESSAGE = 'I promise to love and accept you, forever and always';
+  const MESSAGE = 'thank you for being patient with me';
   const MONO = 'ui-monospace, Menlo, Consolas, "Courier New", monospace';
+  const SERIF = 'Georgia, "Times New Roman", serif';
 
   // ---------- grid ----------
   let FONT, cw, ch, cols, rows, dpr, aspect, stars = [];
-  const W = 140, H = 136, CX = 70;   // design space (square units)
+  const W = 140, H = 136, CX = 70, Y0 = 72, D = 300;   // design space + camera
 
   function setFont() { ctx.font = `bold ${FONT}px ${MONO}`; }
   function resize() {
@@ -70,29 +71,44 @@
   let seed = 7;
   const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 
+  // ---------- camera ----------
+  let yaw = 0, pitch = -0.12, vyaw = 0, vpitch = 0;
+  // 3D point (X right, Y down, Z toward viewer; X/Z relative to the bouquet's axis) -> [x, y, depth, scale]
+  function proj(X, Y, Z) {
+    const c = Math.cos(yaw), s = Math.sin(yaw);
+    const x1 = X * c + Z * s, z1 = -X * s + Z * c;
+    const cp = Math.cos(pitch), sp = Math.sin(pitch), y0 = Y - Y0;
+    const y2 = y0 * cp - z1 * sp, z2 = y0 * sp + z1 * cp;
+    const p = D / (D - z2);
+    return [CX + x1 * p, Y0 + y2 * p, z2, p];
+  }
+  // a point in a stem's/leaf's own vertical plane: u along the plane, w across it
+  const onPlane = (o, u, y, w = 0) => proj(u * o.ce - w * o.se, y, u * o.se + w * o.ce);
+  const depthAlpha = z => clamp(0.62 + z / 110, 0.4, 1);
+
   // ---------- the bouquet ----------
-  // each stem: horizontal reach, height of its arch, droop at the tip
   function makeStem(reach, top, droop, d, n, sz, back) {
-    const side = Math.sign(reach) || 1, x0 = CX + side * (0.5 + rnd());
+    const side = Math.sign(reach) || 1, u0 = side * (0.5 + rnd());
+    const az = back ? -side * (0.7 + rnd() * 0.7) : side * (rnd() - 0.3) * 0.7;
     return {
-      p: [[x0, 98], [x0 + reach * 0.08, 64], [CX + reach * 0.45, top], [CX + reach, top + droop]],
-      d, n, sz, back,
+      p: [[u0, 98], [u0 + reach * 0.08, 64], [reach * 0.45, top], [reach, top + droop]],
+      d, n, sz, ce: Math.cos(az), se: Math.sin(az),
       bells: Array.from({ length: n }, (_, b) => ({
         side: (b % 2 ? 1 : -1) * (0.6 + rnd() * 0.9),
         drop: 3.6 + rnd() * 2.4,
+        w: (rnd() - 0.5) * 4,
         jit: (rnd() - 0.5) * 0.04,
         ph: rnd() * 6.28,
       })),
     };
   }
   const stems = [
-    // back layer: dimmer, gives depth
-    makeStem(-40,  8, 10, 0.2, 8, 0.8, true),
-    makeStem( 38,  6, 12, 0.4, 8, 0.8, true),
-    makeStem(-62, 30, 14, 0.6, 7, 0.75, true),
-    makeStem( 64, 28, 14, 0.8, 7, 0.75, true),
-    makeStem( -6,  0,  8, 0.5, 7, 0.75, true),
-    // front layer
+    makeStem(-40,  8, 10, 0.2, 8, 0.85, true),
+    makeStem( 38,  6, 12, 0.4, 8, 0.85, true),
+    makeStem(-62, 30, 14, 0.6, 7, 0.8, true),
+    makeStem( 64, 28, 14, 0.8, 7, 0.8, true),
+    makeStem( -6,  0,  8, 0.5, 7, 0.8, true),
+    makeStem( 30, 40, 12, 0.9, 6, 0.8, true),
     makeStem(-66, 14, 18, 0.0, 10, 1.0, false),
     makeStem( 66, 12, 20, 0.3, 10, 1.0, false),
     makeStem(-30, 12, 14, 0.6, 9, 0.95, false),
@@ -102,31 +118,39 @@
     makeStem( 12, 22, 10, 1.1, 7, 0.9, false),
     makeStem(-16, 34, 10, 1.3, 6, 0.85, false),
   ];
+  const leafAt = (az, b, tip, w, d) => ({ ce: Math.cos(az), se: Math.sin(az), b, tip, w, d });
   const leaves = [
-    { b: [66,110], tip: [10,78],  w: 12, d: 0.0 },
-    { b: [74,110], tip: [130,76], w: 12, d: 0.2 },
-    { b: [68,110], tip: [36,40],  w: 8,  d: 0.4 },
-    { b: [72,110], tip: [104,42], w: 8,  d: 0.55 },
+    leafAt( 0.25, [-4,110], [-60,78], 12, 0.0),
+    leafAt(-0.25, [ 4,110], [ 60,76], 12, 0.2),
+    leafAt( 1.9,  [-2,110], [-30,40],  8, 0.4),
+    leafAt(-1.9,  [ 2,110], [ 34,42],  8, 0.55),
+    leafAt( 1.3,  [-3,110], [-56,74], 11, 0.3),
+    leafAt(-1.3,  [ 3,110], [ 58,72], 11, 0.45),
   ];
 
-  function drawLeaf(L, k) {
-    if (k <= 0) return;
+  function leafItem(L, k) {
+    if (k <= 0) return null;
     const tip = [L.b[0] + (L.tip[0] - L.b[0]) * k, L.b[1] + (L.tip[1] - L.b[1]) * k];
     const dx = tip[0] - L.b[0], dy = tip[1] - L.b[1], len = Math.hypot(dx, dy);
     const nx = -dy / len, ny = dx / len, w = L.w * k;
     const m = [L.b[0] + dx * 0.5, L.b[1] + dy * 0.5];
-    const g = octx.createLinearGradient(L.b[0], L.b[1], tip[0], tip[1]);
-    g.addColorStop(0, '#0f3318'); g.addColorStop(0.55, '#1b5626'); g.addColorStop(1, '#36803c');
-    octx.fillStyle = g;
-    octx.beginPath();
-    octx.moveTo(L.b[0], L.b[1]);
-    octx.quadraticCurveTo(m[0] + nx * w, m[1] + ny * w, tip[0], tip[1]);
-    octx.quadraticCurveTo(m[0] - nx * w, m[1] - ny * w, L.b[0], L.b[1]);
-    octx.fill();
-    octx.strokeStyle = '#549c50'; octx.lineWidth = 0.6;
-    octx.beginPath(); octx.moveTo(L.b[0], L.b[1]);
-    octx.quadraticCurveTo(m[0] + nx * w * 0.15, m[1] + ny * w * 0.15, tip[0], tip[1]);
-    octx.stroke();
+    const B = onPlane(L, L.b[0], L.b[1]), T = onPlane(L, tip[0], tip[1]);
+    const C1 = onPlane(L, m[0] + nx * w, m[1] + ny * w), C2 = onPlane(L, m[0] - nx * w, m[1] - ny * w);
+    const V = onPlane(L, m[0] + nx * w * 0.15, m[1] + ny * w * 0.15);
+    const M = onPlane(L, m[0], m[1]);
+    return { z: M[2], draw() {
+      octx.globalAlpha = depthAlpha(M[2]);
+      const g = octx.createLinearGradient(B[0], B[1], T[0], T[1]);
+      g.addColorStop(0, '#0f3318'); g.addColorStop(0.55, '#1b5626'); g.addColorStop(1, '#36803c');
+      octx.fillStyle = g;
+      octx.beginPath(); octx.moveTo(B[0], B[1]);
+      octx.quadraticCurveTo(C1[0], C1[1], T[0], T[1]);
+      octx.quadraticCurveTo(C2[0], C2[1], B[0], B[1]);
+      octx.fill();
+      octx.strokeStyle = '#549c50'; octx.lineWidth = 0.6;
+      octx.beginPath(); octx.moveTo(B[0], B[1]); octx.quadraticCurveTo(V[0], V[1], T[0], T[1]); octx.stroke();
+      octx.globalAlpha = 1;
+    } };
   }
 
   const glows = [];   // bell centres in grid cells, filled each frame
@@ -134,10 +158,9 @@
     if (k <= 0) return;
     octx.save();
     octx.translate(x, y); octx.rotate(tilt); octx.scale(k, k);
-    // round, globe-like bell with a small flared, scalloped lip
     const pulse = 0.5 + 0.5 * Math.sin(t * 1.4 + ph);
     const g = octx.createRadialGradient(0, r * 1.05, r * 0.05, 0, r * 0.7, r * 1.5);
-    g.addColorStop(0, `rgb(255,${236 + pulse * 14 | 0},${170 + pulse * 40 | 0})`);  // warm inner glow
+    g.addColorStop(0, `rgb(255,${236 + pulse * 14 | 0},${170 + pulse * 40 | 0})`);
     g.addColorStop(0.35, '#fffaf0');
     g.addColorStop(0.75, '#e9ecf4');
     g.addColorStop(1, '#a9b4d0');
@@ -157,8 +180,7 @@
     octx.fillStyle = '#a6d890';
     octx.beginPath(); octx.arc(0, r * 0.05, r * 0.24, 0, 6.28); octx.fill();
     const m = octx.getTransform();
-    glows.push({ x: m.a * 0 + m.c * r * 1.05 + m.e, y: m.b * 0 + m.d * r * 1.05 + m.f,
-                 r: r * Math.abs(m.a), a: octx.globalAlpha, ph });
+    glows.push({ x: m.c * r * 1.05 + m.e, y: m.d * r * 1.05 + m.f, r: r * Math.abs(m.a), a: octx.globalAlpha, ph });
     octx.restore();
   }
 
@@ -170,43 +192,48 @@
     octx.beginPath(); octx.ellipse(x, y, r * k * 0.85, r * k, 0, 0, 6.28); octx.fill();
   }
 
-  function drawStem(S, i, t, sway) {
+  function stemItem(S, i, t, sway) {
     const k = ease(prog(t, 1.0 + S.d, 3.0 + S.d));
-    if (k <= 0) return;
-    octx.globalAlpha = S.back ? 0.55 : 1;
+    if (k <= 0) return null;
     const a = sway * 0.03 * Math.sin(t * 0.9 + i * 1.7);
     const p = S.p.map((pt, j) => j === 0 ? pt : rot(pt, S.p[0], a * j / 3));
-    octx.strokeStyle = '#6cbc64'; octx.lineWidth = 1.2; octx.lineCap = 'round';
-    octx.beginPath();
-    const N = 60;
-    for (let j = 0; j <= N * k; j++) {
-      const q = bez(p, j / N);
-      j ? octx.lineTo(q[0], q[1]) : octx.moveTo(q[0], q[1]);
-    }
-    octx.stroke();
-
-    const n = S.n;
-    for (let b = 0; b < n; b++) {
-      const B = S.bells[b];
-      const tb = 0.34 + b * (0.65 / (n - 1)) + B.jit;
-      if (k < tb) continue;
-      const bk = easeBack(prog(t, 1.0 + S.d + 2.0 * tb + 0.1, 1.0 + S.d + 2.0 * tb + 0.6));
-      const q = bez(p, tb);
-      const hang = [q[0] + B.side * 1.6, q[1] + B.drop];
-      octx.strokeStyle = '#7cc672'; octx.lineWidth = 0.55;
-      octx.beginPath(); octx.moveTo(q[0], q[1]);
-      octx.quadraticCurveTo(q[0] + B.side * 2.2, q[1] + 0.4, hang[0], hang[1]); octx.stroke();
-      const swing = sway * 0.12 * Math.sin(t * 1.6 + B.ph);
-      if (b === n - 1) drawBud(hang[0], hang[1] + 1.2, 1.6 * S.sz, bk);
-      else drawBell(hang[0], hang[1], (3.6 - b * (1.6 / n)) * S.sz, bk, swing, t, B.ph);
-    }
-    octx.globalAlpha = 1;
+    const mid = bez(p, 0.7), Z = onPlane(S, mid[0], mid[1])[2];
+    return { z: Z, draw() {
+      octx.globalAlpha = depthAlpha(Z);
+      octx.strokeStyle = '#6cbc64'; octx.lineWidth = 1.2; octx.lineCap = 'round';
+      octx.beginPath();
+      const N = 60;
+      for (let j = 0; j <= N * k; j++) {
+        const q = bez(p, j / N), P = onPlane(S, q[0], q[1]);
+        j ? octx.lineTo(P[0], P[1]) : octx.moveTo(P[0], P[1]);
+      }
+      octx.stroke();
+      const n = S.n;
+      for (let b = 0; b < n; b++) {
+        const B = S.bells[b];
+        const tb = 0.34 + b * (0.65 / (n - 1)) + B.jit;
+        if (k < tb) continue;
+        const bk = easeBack(prog(t, 1.0 + S.d + 2.0 * tb + 0.1, 1.0 + S.d + 2.0 * tb + 0.6));
+        const q = bez(p, tb);
+        const Q = onPlane(S, q[0], q[1]);
+        const Cp = onPlane(S, q[0] + B.side * 2.2, q[1] + 0.4, B.w * 0.5);
+        const Hh = onPlane(S, q[0] + B.side * 1.6, q[1] + B.drop, B.w);
+        octx.strokeStyle = '#7cc672'; octx.lineWidth = 0.55;
+        octx.beginPath(); octx.moveTo(Q[0], Q[1]); octx.quadraticCurveTo(Cp[0], Cp[1], Hh[0], Hh[1]); octx.stroke();
+        const swing = sway * 0.12 * Math.sin(t * 1.6 + B.ph);
+        if (b === n - 1) drawBud(Hh[0], Hh[1] + 1.2 * Hh[3], 1.6 * S.sz * Hh[3], bk);
+        else drawBell(Hh[0], Hh[1], (3.6 - b * (1.6 / n)) * S.sz * Hh[3], bk, swing, t, B.ph);
+      }
+      octx.globalAlpha = 1;
+    } };
   }
 
   function drawRibbon(t) {
     const k = easeBack(prog(t, 4.2, 4.9));
     if (k <= 0) return;
-    octx.save(); octx.translate(CX, 101); octx.scale(k, k);
+    const P = proj(0, 101, 0);
+    octx.save(); octx.translate(P[0], P[1]);
+    octx.scale(k * P[3] * (0.55 + 0.45 * Math.abs(Math.cos(yaw))), k * P[3]);
     octx.fillStyle = '#f2a7bf';
     octx.beginPath(); octx.moveTo(-1, 1); octx.lineTo(-7, 12); octx.lineTo(-4, 11); octx.lineTo(-3, 13); octx.closePath(); octx.fill();
     octx.beginPath(); octx.moveTo(1, 1); octx.lineTo(7, 12); octx.lineTo(4, 11); octx.lineTo(3, 13); octx.closePath(); octx.fill();
@@ -224,19 +251,20 @@
   function drawBase(t) {
     const k = ease(prog(t, 0.0, 1.0));
     octx.strokeStyle = '#4e9a4c'; octx.lineWidth = 1.1; octx.lineCap = 'round';
-    for (let i = -4; i <= 4; i++) {
-      const bx = CX + i * 1.5, by = 132;
-      octx.beginPath(); octx.moveTo(bx, by);
-      octx.lineTo(bx + (CX + i * 0.4 - bx) * k, by + (98 - by) * k);
+    for (let i = 0; i < 10; i++) {
+      const a = i / 10 * 6.283, X = 3.2 * Math.cos(a), Z = 3.2 * Math.sin(a);
+      const A = proj(X, 132, Z), B = proj(X * 0.2, 98, Z * 0.2);
+      octx.beginPath(); octx.moveTo(A[0], A[1]);
+      octx.lineTo(A[0] + (B[0] - A[0]) * k, A[1] + (B[1] - A[1]) * k);
       octx.stroke();
     }
   }
 
-  // moon geometry in grid cells (top-right corner)
-  let moon = { x: 0, y: 0, r: 0 };
+  // moon geometry in grid cells (top-right corner, stays put in the sky)
+  let moon = { x: 0, y: 0, r: 0, k: 0 };
   function drawMoon(t) {
     const k = ease(prog(t, 0.0, 2.5));
-    const R = Math.max(5, Math.min(cols, rows * aspect) * 0.075);  // radius in cell-widths
+    const R = Math.max(5, Math.min(cols, rows * aspect) * 0.075);
     const mx = cols - R * 2.1, my = (R * 2.0) / aspect;
     moon = { x: mx, y: my, r: R, k };
     if (k <= 0) return;
@@ -253,31 +281,70 @@
     octx.restore();
   }
 
-  let view = { s: 1, ox: 0, oy: 0 };
   function scene(t) {
     octx.setTransform(1, 0, 0, 1, 0, 0);
     octx.clearRect(0, 0, cols, rows);
     glows.length = 0;
     drawMoon(t);
-    const s = Math.min(cols / W, rows * aspect / H) * 0.84;
-    const ox = (cols - W * s) / 2, oy = (rows - H * s / aspect) / 2 - rows * 0.05;
-    view = { s, ox, oy };
+    const s = Math.min(cols / W, rows * aspect / H) * 0.8;
+    const ox = (cols - W * s) / 2, oy = (rows - H * s / aspect) / 2 - rows * 0.06;
     octx.setTransform(s, 0, 0, s / aspect, ox, oy);
     const sway = ease(prog(t, 5.0, 7.0));
     drawBase(t);
-    leaves.forEach(L => drawLeaf(L, ease(prog(t, 0.6 + L.d, 2.4 + L.d))));
-    stems.filter(S => S.back).forEach((S, i) => drawStem(S, i, t, sway));
-    stems.filter(S => !S.back).forEach((S, i) => drawStem(S, i + 5, t, sway));
+    const items = [];
+    leaves.forEach(L => { const it = leafItem(L, ease(prog(t, 0.6 + L.d, 2.4 + L.d))); if (it) items.push(it); });
+    stems.forEach((S, i) => { const it = stemItem(S, i, t, sway); if (it) items.push(it); });
+    items.sort((a, b) => a.z - b.z).forEach(it => it.draw());
     drawRibbon(t);
   }
 
+  // ---------- interaction ----------
+  let start = performance.now(), lastInteract = -1e9, everDragged = false, drag = null;
+  let replayTop = innerHeight - 40, hoverReplay = false;
+  function replay() { start = performance.now(); yaw = 0; pitch = -0.12; vyaw = vpitch = 0; lastInteract = -1e9; }
+  canvas.addEventListener('pointerdown', e => {
+    canvas.setPointerCapture(e.pointerId);
+    drag = { x: e.clientX, y: e.clientY, moved: 0 };
+  });
+  canvas.addEventListener('pointermove', e => {
+    hoverReplay = e.clientY >= replayTop;
+    if (drag) {
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      drag.x = e.clientX; drag.y = e.clientY;
+      drag.moved += Math.abs(dx) + Math.abs(dy);
+      if (drag.moved > 5) {
+        vyaw = dx * 0.008; vpitch = -dy * 0.006;
+        yaw += vyaw; pitch = clamp(pitch + vpitch, -1.0, 0.45);
+        lastInteract = performance.now(); everDragged = true;
+      }
+    }
+    canvas.style.cursor = drag && drag.moved > 5 ? 'grabbing' : hoverReplay ? 'pointer' : 'grab';
+  });
+  const endDrag = (e, allowClick) => {
+    if (drag && drag.moved <= 5) { vyaw = vpitch = 0; if (allowClick && e.clientY >= replayTop) replay(); }
+    drag = null;
+    canvas.style.cursor = hoverReplay ? 'pointer' : 'grab';
+  };
+  canvas.addEventListener('pointerup', e => endDrag(e, true));
+  canvas.addEventListener('pointercancel', e => endDrag(e, false));
+  canvas.addEventListener('pointerleave', () => { hoverReplay = false; });
+
   // ---------- render to characters ----------
   const HI = '@%#&8$B', MID = '*+=x%o', LO = '.:-~\'', LEAF = '/\\|(){}';
-  let start = performance.now();
-  canvas.addEventListener('click', () => start = performance.now());
+  let prev = performance.now();
 
   function frame(now) {
+    const dt = Math.min(0.05, (now - prev) / 1000); prev = now;
     const t = (now - start) / 1000;
+
+    // inertia after a drag, then a slow turn when left alone
+    if (!drag) {
+      yaw += vyaw; pitch = clamp(pitch + vpitch, -1.0, 0.45);
+      vyaw *= 0.93; vpitch *= 0.9;
+      const idle = (now - lastInteract) / 1000;
+      if (idle > 5 && t > 7) yaw += dt * 0.18 * clamp((Math.min(idle - 5, t - 7)) / 2, 0, 1);
+    }
+
     scene(t);
     const data = octx.getImageData(0, 0, cols, rows).data;
     const Wp = innerWidth, Hp = innerHeight;
@@ -285,7 +352,6 @@
     ctx.fillStyle = '#04050a';
     ctx.fillRect(0, 0, Wp, Hp);
 
-    // moon halo (behind the characters)
     if (moon.k > 0) {
       const mx = moon.x * cw, my = moon.y * ch, mr = moon.r * cw;
       const breathe = 1 + 0.04 * Math.sin(t * 0.8);
@@ -301,12 +367,15 @@
     setFont();
     const tick = Math.floor(t * 5);
 
+    // stars drift a little as the bouquet turns
+    const shift = Math.round(yaw * cols * 0.05);
     for (const st of stars) {
-      const i = (st.y * cols + st.x) * 4;
+      const sx = ((st.x + shift) % cols + cols) % cols;
+      const i = (st.y * cols + sx) * 4;
       if (data[i + 3] > 20) continue;
       const b = 0.15 + 0.6 * Math.pow(Math.max(0, Math.sin(t * st.s + st.p)), 3);
       ctx.fillStyle = `rgba(215,225,255,${b})`;
-      ctx.fillText(st.c, st.x * cw, st.y * ch);
+      ctx.fillText(st.c, sx * cw, st.y * ch);
     }
 
     for (let y = 0; y < rows; y++) {
@@ -341,17 +410,18 @@
     }
     ctx.globalCompositeOperation = 'source-over';
 
-    // message, typed out once the bouquet has bloomed
-    const typed = Math.floor((t - 5.6) * 20);
+    // message + the replay strip underneath it
+    let size = Math.round(clamp(Wp / 26, 15, 32));
+    ctx.font = `italic ${size}px ${SERIF}`;
+    while (ctx.measureText(MESSAGE).width > Wp * 0.9 && size > 11) {
+      size--; ctx.font = `italic ${size}px ${SERIF}`;
+    }
+    const ty = Hp - size * 3.2;
+    replayTop = ty + size * 1.35;
+    const typed = Math.floor((t - 5.6) * 18);
     if (typed > 0) {
-      let size = Math.round(clamp(Wp / 34, 15, 30));
-      ctx.font = `italic ${size}px Georgia, "Times New Roman", serif`;
-      while (ctx.measureText(MESSAGE).width > Wp * 0.9 && size > 11) {
-        size--; ctx.font = `italic ${size}px Georgia, "Times New Roman", serif`;
-      }
       const shown = MESSAGE.slice(0, typed);
       const full = ctx.measureText(MESSAGE).width;
-      const ty = Hp - size * 2.6;
       ctx.textAlign = 'left';
       ctx.shadowColor = 'rgba(247,170,200,0.75)';
       ctx.shadowBlur = size * 0.6;
@@ -361,14 +431,21 @@
         ctx.fillText('|', (Wp - full) / 2 + ctx.measureText(shown).width + 2, ty);
       }
       ctx.shadowBlur = 0;
-      if (typed > MESSAGE.length + 20) {
-        ctx.font = `${Math.max(10, Math.round(size * 0.45))}px ${MONO}`;
-        ctx.textAlign = 'center';
-        ctx.fillStyle = 'rgba(200,205,225,0.3)';
-        ctx.fillText('click to replay', Wp / 2, Hp - size * 1.1);
-        ctx.textAlign = 'left';
-      }
     }
+    if (hoverReplay) {
+      ctx.fillStyle = 'rgba(247,191,208,0.06)';
+      ctx.fillRect(0, replayTop, Wp, Hp - replayTop);
+    }
+    const ls = Math.max(11, Math.round(size * 0.42));
+    ctx.font = `${ls}px ${MONO}`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = `rgba(220,210,230,${hoverReplay ? 0.75 : 0.32})`;
+    ctx.fillText('↻  replay', Wp / 2, replayTop + (Hp - replayTop - ls) / 2);
+    if (!everDragged && t > 6.5) {
+      ctx.fillStyle = `rgba(200,205,225,${0.35 * prog(t, 6.5, 8)})`;
+      ctx.fillText('drag to turn the bouquet', Wp / 2, Math.max(14, Hp * 0.03));
+    }
+    ctx.textAlign = 'left';
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
