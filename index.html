@@ -2,11 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#04050a">
 <title>ASCII Lily of the Valley</title>
 <style>
   html, body { margin: 0; height: 100%; background: #04050a; overflow: hidden; }
-  canvas { display: block; width: 100vw; height: 100vh; cursor: grab; touch-action: none; user-select: none; }
+  /* the padding only exposes the safe-area sizes to the script; the canvas is fixed over it */
+  body { box-sizing: border-box; padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+  canvas { display: block; position: fixed; left: 0; top: 0; width: 100%; height: 100vh; height: 100lvh; cursor: grab;
+           touch-action: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
 </style>
 </head>
 <body>
@@ -21,19 +25,27 @@
   const MESSAGE = 'Ikaw at ikaw';
   const MONO = 'ui-monospace, Menlo, Consolas, "Courier New", monospace';
   const SERIF = 'Georgia, "Times New Roman", serif';
+  const HI = '@%#&8$B', MID = '*+=x%o', LO = '.:-~\'', LEAF = '/\\|(){}';
 
-  // ---------- grid ----------
+  // ---------- grid + layout ----------
   let FONT, cw, ch, cols, rows, dpr, aspect, stars = [];
-  const W = 140, H = 136, CX = 70, Y0 = 72, D = 420, WATER = 122;   // design space + camera
+  const W = 140, CX = 70, Y0 = 72, D = 420, WATER = 122;   // design space + camera
+  const TOP = -4, TALL = 156, POND_TALL = 176;             // scene height without and with the front of the pond
+  const MAX_PIXELS = 5e6;                                  // keeps very large screens fast
+  let view = { w: 0, h: 0 };                               // everything in here is in CSS pixels
 
-  function setFont() { ctx.font = `bold ${FONT}px ${MONO}`; }
+  const layer = document.createElement('canvas');          // the characters, written as raw pixels
+  const lctx = layer.getContext('2d');
+  let layerImg, layerPx, glyphs = {};
+
   function resize() {
-    dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = innerWidth, h = innerHeight;
-    FONT = Math.max(5, Math.min(8, Math.round(Math.min(w, h) / 145)));
-    canvas.width = w * dpr; canvas.height = h * dpr;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (!w || !h) return;
+    dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(MAX_PIXELS / (w * h))));
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    setFont();
+    FONT = Math.max(5, Math.min(8, Math.round(Math.min(w, h) / 145)));
+    ctx.font = `bold ${FONT}px ${MONO}`;
     cw = ctx.measureText('M').width;
     ch = Math.max(6, Math.round(FONT * 1.15));
     cols = Math.floor(w / cw); rows = Math.floor(h / ch);
@@ -45,9 +57,94 @@
                    p: Math.random() * 6.28, s: 0.6 + Math.random() * 1.8,
                    c: '.+*'[Math.random() * 3 | 0] });
     }
+    layoutScene();
+    watcher.unobserve(canvas); watcher.observe(canvas);   // measure again at the new size
+    buildGlyphs();
   }
-  addEventListener('resize', resize);
-  resize();
+
+  // How much of the canvas, from its top, is not covered by the browser's own bars. Safari's address
+  // bar can be at the top or bottom, and browsers report it in different ways, so trust the smallest.
+  let hidden = 0;   // how much is cut off at the bottom; this also works when the page is inside a frame
+  const watcher = new IntersectionObserver(list => {
+    const e = list[list.length - 1];
+    hidden = e.intersectionRatio > 0.4 ? e.boundingClientRect.bottom - e.intersectionRect.bottom : 0;
+  }, { threshold: Array.from({ length: 201 }, (_, i) => i / 200) });
+  function visibleHeight() {
+    const vv = window.visualViewport;
+    return Math.round(Math.min(canvas.clientHeight, innerHeight, canvas.clientHeight - hidden,
+      vv && Math.abs(vv.scale - 1) < 0.01 ? vv.height : Infinity));
+  }
+
+  function layoutScene() {
+    const w = canvas.clientWidth, full = canvas.clientHeight, h = visibleHeight();
+    const pad = getComputedStyle(document.body), inset = side => parseFloat(pad['padding' + side]) || 0;
+    const safe = { t: inset('Top'), r: inset('Right'), b: inset('Bottom'), l: inset('Left') };
+    let size = Math.round(clamp(Math.min(w, h) / 18, 15, 32));
+    ctx.font = `italic ${size}px ${SERIF}`;
+    while (ctx.measureText(MESSAGE).width > w * 0.9 && size > 11) {
+      size--; ctx.font = `italic ${size}px ${SERIF}`;
+    }
+    const msgW = ctx.measureText(MESSAGE).width;
+    const stripH = Math.max(44, size * 1.85);              // a comfortable size to tap
+    const bottom = Math.min(h, full - safe.b);             // above both the browser's bar and the home bar
+    const short = h < 500, small = Math.max(11, Math.round(size * 0.42));
+    const line = size * 1.35;                              // message height, including space below it
+    let replayTop = bottom - stripH, ty = replayTop - line, k, oy;   // k: CSS pixels per design unit
+    if (h > w) {
+      // upright phones and tablets: bouquet, message and replay form one group, kept well off the bottom
+      const gap = size, rest = gap + line + stripH;
+      k = Math.min(w / 146, (bottom - safe.t - rest) / POND_TALL);
+      const top = safe.t + Math.max(0, (bottom - safe.t - rest - POND_TALL * k) * 0.38);
+      oy = top - TOP * k;
+      ty = top + POND_TALL * k + gap;
+      replayTop = ty + line;
+    } else if (short) {
+      k = Math.min(w / 146, (ty - safe.t) / TALL);         // phones on their side
+      oy = safe.t - TOP * k;
+    } else {
+      k = Math.min(w / 175, h / 170);
+      oy = (h - 136 * k) / 2 - h * 0.09;
+    }
+    // when the bouquet reaches the top of the screen, the hint moves to the corner
+    const hintY = safe.t + Math.max(14, h * 0.03);
+    const hintX = oy + TOP * k < hintY + small * 2 ? safe.l + 16 : null;   // null: centred
+    view = { w, h, full, safe, size, small, msgW, replayTop, stripH, ty, hintX, hintY, k, ox: (w - W * k) / 2, oy, half: w / k / 2 };
+  }
+
+  // each character's shape, as a list of pixel offsets and coverages
+  function buildGlyphs() {
+    const gw = Math.ceil(cw * dpr) + 2, gh = Math.ceil(ch * dpr * 1.4);
+    layer.width = canvas.width + gw; layer.height = canvas.height + gh;   // spare edge so nothing wraps around
+    layerImg = lctx.createImageData(layer.width, layer.height);
+    layerPx = new Uint32Array(layerImg.data.buffer);
+    const g = document.createElement('canvas');
+    g.width = gw; g.height = gh;
+    const gx = g.getContext('2d', { willReadFrequently: true });
+    gx.font = `bold ${FONT * dpr}px ${MONO}`; gx.textBaseline = 'top';
+    glyphs = {};
+    // browsers draw dark text thinner than light text, so keep a shape for each
+    for (const c of new Set(HI + MID + LO + LEAF + '.+*')) glyphs[c] = ['#1f1f1f', '#5f5f5f', '#9f9f9f', '#fff'].map(shade => {
+      gx.fillStyle = shade;
+      gx.clearRect(0, 0, gw, gh);
+      gx.fillText(c, 0, 0);
+      const d = gx.getImageData(0, 0, gw, gh).data, at = [], cov = [];
+      for (let i = 0; i < gw * gh; i++) {
+        const a = d[i * 4 + 3];
+        if (a > 8) { at.push((i / gw | 0) * layer.width + i % gw); cov.push(a); }
+      }
+      return { at: Int32Array.from(at), cov: Uint8Array.from(cov) };
+    });
+  }
+
+  function putChar(c, x, y, r, g, b, alpha) {
+    const G = glyphs[c][(r * 2 + g * 5 + b) >> 9], at = G.at, cov = G.cov;
+    const base = Math.round(y * ch * dpr) * layer.width + Math.round(x * cw * dpr);
+    const rgb = (b << 16) | (g << 8) | r;
+    for (let i = 0; i < at.length; i++) {
+      const a = cov[i] * alpha | 0, p = base + at[i];
+      if (a > layerPx[p] >>> 24) layerPx[p] = (a << 24) | rgb;
+    }
+  }
 
   // ---------- helpers ----------
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -66,7 +163,7 @@
   function hash(x, y, z) {
     let h = x * 374761393 + y * 668265263 + z * 2147483647;
     h = (h ^ (h >>> 13)) * 1274126177;
-    return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;   // always below 1, so it is safe as an index
   }
   let seed = 7;
   const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -85,6 +182,8 @@
   // a point in a stem's/leaf's own vertical plane: u along the plane, w across it
   const onPlane = (o, u, y, w = 0) => proj(u * o.ce - w * o.se, y, u * o.se + w * o.ce);
   const depthAlpha = z => clamp(0.62 + z / 110, 0.4, 1);
+  // 1 in the middle, 0 for something of radius r that would cross the side of the screen
+  const edgeAlpha = (x, r) => clamp((view.half - r - Math.abs(x - CX)) / 10, 0, 1);
 
   // ---------- the bouquet ----------
   // each stem arches out in its own direction (phi) so the bouquet is round from every side
@@ -144,8 +243,9 @@
   function drawPad(P, t) {
     const k = ease(prog(t, P.d, P.d + 1.2));
     if (k <= 0) return;
-    const rr = P.r * k;
-    octx.globalAlpha = depthAlpha(proj(P.x, WATER, P.z)[2]) * 0.9;
+    const rr = P.r * k, at = proj(P.x, WATER, P.z), edge = edgeAlpha(at[0], P.r);
+    if (edge <= 0) return;
+    octx.globalAlpha = depthAlpha(at[2]) * 0.9 * edge;
     octx.fillStyle = '#2f8a48';
     octx.beginPath();
     let first = true;
@@ -165,7 +265,8 @@
     if (o <= 0) return null;
     const bob = 0.35 * Math.sin(t * 1.1 + L.ph);
     const cy = WATER - 0.4 + bob, s = L.s * (0.4 + 0.6 * o);
-    const C = proj(L.x, cy, L.z);
+    const C = proj(L.x, cy, L.z), edge = edgeAlpha(C[0], L.s);
+    if (edge <= 0) return null;
     return { z: C[2], draw() {
       const petals = [];
       RINGS.forEach(R => {
@@ -181,7 +282,7 @@
         }
       });
       petals.sort((p, q) => p.z - q.z);
-      octx.globalAlpha = depthAlpha(C[2]);
+      octx.globalAlpha = depthAlpha(C[2]) * edge;
       let podDrawn = false;
       const pod = () => {
         octx.fillStyle = '#ffd76a';
@@ -339,7 +440,7 @@
   function drawMoon(t) {
     const k = ease(prog(t, 0.0, 2.5));
     const R = Math.max(5, Math.min(cols, rows * aspect) * 0.075);
-    const mx = cols - R * 2.1, my = (R * 2.0) / aspect;
+    const mx = cols - R * 2.1 - view.safe.r / cw, my = (R * 2.0) / aspect + view.safe.t / ch;
     moon = { x: mx, y: my, r: R, k };
     if (k <= 0) return;
     octx.save();
@@ -360,9 +461,7 @@
     octx.clearRect(0, 0, cols, rows);
     glows.length = 0;
     drawMoon(t);
-    const s = Math.min(cols / W, rows * aspect / H) * 0.8;
-    const ox = (cols - W * s) / 2, oy = (rows - H * s / aspect) / 2 - rows * 0.09;
-    octx.setTransform(s, 0, 0, s / aspect, ox, oy);
+    octx.setTransform(view.k / cw, 0, 0, view.k / ch, view.ox / cw, view.oy / ch);
     const sway = ease(prog(t, 5.0, 7.0));
     pads.slice().sort((a, b) => proj(a.x, WATER, a.z)[2] - proj(b.x, WATER, b.z)[2]).forEach(P => drawPad(P, t));
     drawBase(t);
@@ -376,14 +475,15 @@
 
   // ---------- interaction ----------
   let start = performance.now(), lastInteract = -1e9, everDragged = false, drag = null;
-  let replayTop = innerHeight - 40, hoverReplay = false;
+  let hoverReplay = false;
+  const inReplay = y => y >= view.replayTop && y < view.replayTop + view.stripH;
   function replay() { start = performance.now(); yaw = 0; pitch = -0.26; vyaw = vpitch = 0; lastInteract = -1e9; }
   canvas.addEventListener('pointerdown', e => {
     canvas.setPointerCapture(e.pointerId);
     drag = { x: e.clientX, y: e.clientY, moved: 0 };
   });
   canvas.addEventListener('pointermove', e => {
-    hoverReplay = e.clientY >= replayTop;
+    hoverReplay = inReplay(e.clientY);
     if (drag) {
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       drag.x = e.clientX; drag.y = e.clientY;
@@ -397,7 +497,7 @@
     canvas.style.cursor = drag && drag.moved > 5 ? 'grabbing' : hoverReplay ? 'pointer' : 'grab';
   });
   const endDrag = (e, allowClick) => {
-    if (drag && drag.moved <= 5) { vyaw = vpitch = 0; if (allowClick && e.clientY >= replayTop) replay(); }
+    if (drag && drag.moved <= 5) { vyaw = vpitch = 0; if (allowClick && inReplay(e.clientY)) replay(); }
     drag = null;
     canvas.style.cursor = hoverReplay ? 'pointer' : 'grab';
   };
@@ -406,7 +506,15 @@
   canvas.addEventListener('pointerleave', () => { hoverReplay = false; });
 
   // ---------- render to characters ----------
-  const HI = '@%#&8$B', MID = '*+=x%o', LO = '.:-~\'', LEAF = '/\\|(){}';
+  const glowSprite = document.createElement('canvas');   // drawn at 1/5 strength, to keep the gradient smooth
+  glowSprite.width = glowSprite.height = 64;
+  {
+    const g2 = glowSprite.getContext('2d'), gg = g2.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gg.addColorStop(0, 'rgba(255,232,170,0.85)');
+    gg.addColorStop(0.45, 'rgba(255,214,150,0.25)');
+    gg.addColorStop(1, 'rgba(255,200,140,0)');
+    g2.fillStyle = gg; g2.fillRect(0, 0, 64, 64);
+  }
   let prev = performance.now();
 
   function frame(now) {
@@ -415,18 +523,20 @@
 
     // inertia after a drag, then a slow turn when left alone
     if (!drag) {
-      yaw += vyaw; pitch = clamp(pitch + vpitch, -1.0, 0.45);
-      vyaw *= 0.93; vpitch *= 0.9;
+      const f = dt * 60;   // same feel at any frame rate
+      yaw += vyaw * f; pitch = clamp(pitch + vpitch * f, -1.0, 0.45);
+      vyaw *= Math.pow(0.93, f); vpitch *= Math.pow(0.9, f);
       const idle = (now - lastInteract) / 1000;
       if (idle > 5 && t > 7) yaw += dt * 0.18 * clamp((Math.min(idle - 5, t - 7)) / 2, 0, 1);
     }
 
     scene(t);
     const data = octx.getImageData(0, 0, cols, rows).data;
-    const Wp = innerWidth, Hp = innerHeight;
+    if (visibleHeight() !== view.h) layoutScene();   // a browser bar appeared, moved or went away
+    const Wp = view.w, Hp = view.h;
     ctx.globalCompositeOperation = 'source-over';
     ctx.fillStyle = '#04050a';
-    ctx.fillRect(0, 0, Wp, Hp);
+    ctx.fillRect(0, 0, Wp, view.full);
 
     if (moon.k > 0) {
       const mx = moon.x * cw, my = moon.y * ch, mr = moon.r * cw;
@@ -439,8 +549,7 @@
       ctx.fillRect(mx - mr * 4, my - mr * 4, mr * 8, mr * 8);
     }
 
-    ctx.textBaseline = 'top';
-    setFont();
+    layerPx.fill(0);
     const tick = Math.floor(t * 5);
 
     // stars drift a little as the bouquet turns
@@ -450,11 +559,10 @@
       const i = (st.y * cols + sx) * 4;
       if (data[i + 3] > 20) continue;
       const b = 0.15 + 0.6 * Math.pow(Math.max(0, Math.sin(t * st.s + st.p)), 3);
-      ctx.fillStyle = `rgba(215,225,255,${b})`;
-      ctx.fillText(st.c, sx * cw, st.y * ch);
+      putChar(st.c, sx, st.y, 215, 225, 255, b);
     }
 
-    const fadeTop = Hp - Math.round(clamp(Wp / 26, 15, 32)) * 4.2, fadeLen = Hp * 0.08;
+    const fadeTop = view.ty - view.size, fadeLen = Hp * 0.08;
     for (let y = 0; y < rows; y++) {
       const fade = clamp(1 - (y * ch - fadeTop) / fadeLen, 0.12, 1);
       for (let x = 0; x < cols; x++) {
@@ -469,63 +577,61 @@
         if (d > 0.62) set = HI; else if (d > 0.3) set = greenish && hsh < 0.5 ? LEAF : MID; else set = LO;
         const c = set[(hsh * set.length) | 0];
         const f = (0.55 + 0.45 * a + (hsh - 0.5) * 0.15) * (greenish ? 0.8 : 1) * fade;
-        ctx.fillStyle = `rgb(${clamp(r * f, 0, 255) | 0},${clamp(g * f, 0, 255) | 0},${clamp(b * f, 0, 255) | 0})`;
-        ctx.fillText(c, x * cw, y * ch);
+        putChar(c, x, y, Math.min(255, r * f) | 0, Math.min(255, g * f) | 0, Math.min(255, b * f) | 0, 1);
       }
     }
+    lctx.putImageData(layerImg, 0, 0);
+    ctx.drawImage(layer, 0, 0, layer.width / dpr, layer.height / dpr);
 
     // soft light glowing out of each bell
     ctx.globalCompositeOperation = 'lighter';
     for (const G of glows) {
       const px = G.x * cw, py = G.y * ch, pr = Math.max(4, G.r * cw * 2.2);
       const pulse = 0.75 + 0.25 * Math.sin(t * 1.4 + G.ph);
-      const gg = ctx.createRadialGradient(px, py, 0, px, py, pr);
-      gg.addColorStop(0, `rgba(255,232,170,${0.17 * pulse * G.a})`);
-      gg.addColorStop(0.45, `rgba(255,214,150,${0.05 * pulse * G.a})`);
-      gg.addColorStop(1, 'rgba(255,200,140,0)');
-      ctx.fillStyle = gg;
-      ctx.fillRect(px - pr, py - pr, pr * 2, pr * 2);
+      ctx.globalAlpha = 0.2 * pulse * G.a;
+      ctx.drawImage(glowSprite, px - pr, py - pr, pr * 2, pr * 2);
     }
+    ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
 
     // message + the replay strip underneath it
-    let size = Math.round(clamp(Wp / 26, 15, 32));
+    const { size, small, ty, replayTop, stripH, msgW } = view;
+    ctx.textBaseline = 'top';
     ctx.font = `italic ${size}px ${SERIF}`;
-    while (ctx.measureText(MESSAGE).width > Wp * 0.9 && size > 11) {
-      size--; ctx.font = `italic ${size}px ${SERIF}`;
-    }
-    const ty = Hp - size * 3.2;
-    replayTop = ty + size * 1.35;
     const typed = Math.floor((t - 5.6) * 18);
     if (typed > 0) {
       const shown = MESSAGE.slice(0, typed);
-      const full = ctx.measureText(MESSAGE).width;
       ctx.textAlign = 'left';
       ctx.shadowColor = 'rgba(247,170,200,0.75)';
       ctx.shadowBlur = size * 0.6;
       ctx.fillStyle = '#f9c9d8';
-      ctx.fillText(shown, (Wp - full) / 2, ty);
+      ctx.fillText(shown, (Wp - msgW) / 2, ty);
       if (typed < MESSAGE.length && Math.floor(t * 3) % 2) {
-        ctx.fillText('|', (Wp - full) / 2 + ctx.measureText(shown).width + 2, ty);
+        ctx.fillText('|', (Wp - msgW) / 2 + ctx.measureText(shown).width + 2, ty);
       }
       ctx.shadowBlur = 0;
     }
     if (hoverReplay) {
       ctx.fillStyle = 'rgba(247,191,208,0.06)';
-      ctx.fillRect(0, replayTop, Wp, Hp - replayTop);
+      ctx.fillRect(0, replayTop, Wp, stripH);
     }
-    const ls = Math.max(11, Math.round(size * 0.42));
-    ctx.font = `${ls}px ${MONO}`;
+    ctx.font = `${small}px ${MONO}`;
     ctx.textAlign = 'center';
     ctx.fillStyle = `rgba(220,210,230,${hoverReplay ? 0.75 : 0.32})`;
-    ctx.fillText('↻  replay', Wp / 2, replayTop + (Hp - replayTop - ls) / 2);
+    ctx.fillText('↻  replay', Wp / 2, replayTop + (stripH - small) / 2);
     if (!everDragged && t > 6.5) {
       ctx.fillStyle = `rgba(200,205,225,${0.35 * prog(t, 6.5, 8)})`;
-      ctx.fillText('drag to turn the bouquet', Wp / 2, Math.max(14, Hp * 0.03));
+      if (view.hintX !== null) ctx.textAlign = 'left';
+      ctx.fillText('drag to turn the bouquet', view.hintX !== null ? view.hintX : Wp / 2, view.hintY);
     }
     ctx.textAlign = 'left';
     requestAnimationFrame(frame);
   }
+  addEventListener('resize', resize);
+  new ResizeObserver(() => {
+    if (canvas.clientWidth !== view.w || canvas.clientHeight !== view.full) resize();
+  }).observe(canvas);
+  resize();
   requestAnimationFrame(frame);
 }
 </script>

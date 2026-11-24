@@ -11,6 +11,13 @@ in `index.html` (no build step, no dependencies). Open it in a browser to run it
   read back and every non-empty cell is drawn as a character on the visible canvas, colored from
   the pixel. Brightness picks the character set (`HI`, `MID`, `LO`, `LEAF`), and a per-cell hash
   that changes a few times a second makes the characters shimmer.
+- **Speed.** Characters are not drawn with `fillText`. `buildGlyphs` stores each one's shape once, and
+  `putChar` writes it straight into a pixel buffer (`layer`) that is copied to the screen each frame.
+- **Layout.** `layoutScene` sets every position, in CSS pixels, in `view`: it fits phones in both
+  orientations, avoids notches and the home bar, and fades the pond at the screen's sides (`edgeAlpha`).
+- **Browser bars.** The canvas always covers the largest area, but `visibleHeight` measures the part not
+  hidden by a browser bar (top or bottom, including inside a frame) and the content stays within it. Upright
+  phones keep the bouquet, message and replay together, well off the bottom.
 - **3D.** `proj(X, Y, Z)` applies yaw (drag left/right) and pitch (drag up/down) plus perspective.
   Stems, leaves and lotus petals are defined in 3D and projected; bells and the bow are drawn as
   flat shapes at projected positions. Items are depth-sorted back to front.
@@ -25,7 +32,7 @@ in `index.html` (no build step, no dependencies). Open it in a browser to run it
 - **Timeline.** Stems grow first, then leaves, stems and bells, then the bow (~4–5 s), then the
   message types out. `prog(t, a, b)` and the easing helpers control every stage.
 - **Interaction.** Drag rotates (with inertia; it turns slowly on its own after 5 s idle).
-  A click/tap in the strip below the message (`replayTop`) restarts the animation and resets
+  A click/tap in the strip below the message (`view.replayTop`, at least 44 px tall) restarts the animation and resets
   the view. The message text is the `MESSAGE` constant near the top.
 
 ## Current state
